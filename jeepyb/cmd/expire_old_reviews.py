@@ -26,13 +26,14 @@ logger = logging.getLogger('expire_reviews')
 logger.setLevel(logging.INFO)
 
 
-def expire_patch_set(ssh, patch_id, patch_subject):
+def expire_patch_set(ssh, patch_id, patch_subject, gerrit_command):
     message = ('Code review expired after 1 week of no activity'
                ' after a negative review. It can be restored using'
                ' the \`Restore Change\` button under the Patch Set'
                ' on the web interface.')
-    command = ('gerrit review --abandon '
+    command = ('{gerrit_command} review --abandon '
                '--message="{message}" {patch_id}').format(
+                   gerrit_command=gerrit_command,
                    message=message,
                    patch_id=patch_id)
 
@@ -47,10 +48,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('user', help='The gerrit admin user')
     parser.add_argument('ssh_key', help='The gerrit admin SSH key file')
+    parser.add_argument('--as_user',
+                        help='User to run command as if using suexec')
     options = parser.parse_args()
 
     GERRIT_USER = options.user
     GERRIT_SSH_KEY = options.ssh_key
+    AS_USER = options.as_user
 
     logging.basicConfig(format='%(asctime)-6s: %(name)s - %(levelname)s'
                                ' - %(message)s',
@@ -66,9 +70,11 @@ def main():
 
     # Query all reviewed with no activity for 1 week
     logger.info('Searching no activity on negative review for 1 week')
+    gerrit_command = 'gerrit' if not AS_USER \
+        else 'suexec --as=%s -- gerrit' % AS_USER
     stdin, stdout, stderr = ssh.exec_command(
-        'gerrit query --current-patch-set --all-approvals'
-        ' --format JSON status:reviewed age:1w')
+        '%s query --current-patch-set --all-approvals'
+        ' --format JSON age:1w' % gerrit_command)
 
     for line in stdout:
         row = json.loads(line)
@@ -78,7 +84,8 @@ def main():
                 if approval['value'] in ('-1', '-2'):
                     expire_patch_set(ssh,
                                      row['currentPatchSet']['revision'],
-                                     row['subject'])
+                                     row['subject'],
+                                     gerrit_command)
                     break
 
     logger.info('End expire review')
